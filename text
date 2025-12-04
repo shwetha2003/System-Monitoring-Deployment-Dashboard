@@ -1,0 +1,42 @@
+system-monitoring-dashboard/
+├── README.md
+├── docker-compose.yml
+├── .env.example
+├── web/
+│   ├── Dockerfile
+│   ├── package.json
+│   ├── index.js
+│   └── public/
+│       └── index.html
+├── api/
+│   ├── Dockerfile
+│   ├── package.json
+│   └── server.js
+├── prometheus/
+│   ├── prometheus.yml
+│   └── alert.rules.yml
+├── grafana/
+│   └── provisioning/
+│       ├── dashboards/
+│       │   └── dashboard.yml
+│       └── datasources/
+│           └── datasource.yml
+├── elk/
+│   ├── elasticsearch.yml
+│   ├── logstash.conf
+│   └── kibana.yml
+├── terraform/
+│   ├── main.tf
+│   ├── variables.tf
+│   └── outputs.tf
+├── ansible/
+│   ├── playbook.yml
+│   └── inventory.ini
+├── github/
+│   └── workflows/
+│       └── deploy.yml
+├── nginx/
+│   └── nginx.conf
+└── scripts/
+    ├── deploy.sh
+    └── backup.sh
