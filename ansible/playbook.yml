@@ -1,0 +1,187 @@
+---
+- name: Deploy Monitoring System
+  hosts: monitoring_servers
+  become: yes
+  vars:
+    deploy_user: monitoring
+    app_dir: /opt/monitoring
+    docker_compose_version: 1.29.2
+  
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+    
+    - name: Install required packages
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+          - python3-pip
+          - git
+          - htop
+          - ntp
+        state: present
+    
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+    
+    - name: Create deployment user
+      user:
+        name: "{{ deploy_user }}"
+        groups: docker
+        append: yes
+        shell: /bin/bash
+    
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: '0755'
+    
+    - name: Copy application files
+      copy:
+        src: "{{ item }}"
+        dest: "{{ app_dir }}/"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+      loop:
+        - docker-compose.yml
+        - .env
+        - web/
+        - api/
+        - prometheus/
+        - grafana/
+    
+    - name: Set up SSL certificates
+      copy:
+        src: ../ssl/
+        dest: "{{ app_dir }}/ssl"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+      when: ssl_certs is defined
+    
+    - name: Create systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=Monitoring System
+          Requires=docker.service
+          After=docker.service
+          
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory={{ app_dir }}
+          ExecStart=/usr/bin/docker-compose up -d
+          ExecStop=/usr/bin/docker-compose down
+          User={{ deploy_user }}
+          Group={{ deploy_user }}
+          
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/monitoring.service
+    
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+    
+    - name: Enable and start monitoring service
+      systemd:
+        name: monitoring
+        state: started
+        enabled: yes
+    
+    - name: Set up firewall
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "22"
+        - "80"
+        - "443"
+        - "3000"
+    
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+    
+    - name: Set up log rotation
+      copy:
+        content: |
+          {{ app_dir }}/logs/*.log {
+              daily
+              rotate 14
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 644 {{ deploy_user }} {{ deploy_user }}
+          }
+        dest: /etc/logrotate.d/monitoring
+    
+    - name: Set up monitoring cron jobs
+      cron:
+        name: "Backup database"
+        minute: "0"
+        hour: "2"
+        job: "cd {{ app_dir }} && docker-compose exec db pg_dump -U postgres monitoring_db > backup_$(date +%Y%m%d).sql"
+        user: "{{ deploy_user }}"
+    
+    - name: Install monitoring agent
+      apt:
+        name: amazon-cloudwatch-agent
+        state: present
+    
+    - name: Configure CloudWatch agent
+      copy:
+        content: |
+          {
+            "agent": {
+              "metrics_collection_interval": 60,
+              "run_as_user": "root"
+            },
+            "metrics": {
+              "metrics_collected": {
+                "cpu": {
+                  "measurement": ["cpu_usage_idle"],
+                  "metrics_collection_interval": 60,
+                  "totalcpu": false
+                },
+                "disk": {
+                  "measurement": ["used_percent"],
+                  "metrics_collection_interval": 60,
+                  "resources": ["*"]
+                },
+                "mem": {
+                  "measurement": ["mem_used_percent"],
+                  "metrics_collection_interval": 60
+                }
+              }
+            }
+          }
+        dest: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+    
+    - name: Start CloudWatch agent
+      systemd:
+        name: amazon-cloudwatch-agent
+        state: started
+        enabled: yes
+    
+    - name: Verify deployment
+      command: docker ps
+      register: docker_ps
+      changed_when: false
+    
+    - name: Show running containers
+      debug:
+        msg: "{{ docker_ps.stdout_lines }}"
